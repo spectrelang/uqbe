@@ -212,13 +212,13 @@ selret(Blk *b, Fn *fn)
 }
 
 static int
-argsclass(Ins *i0, Ins *i1, Class *carg)
+argsclass(Ins *i0, Ins *i1, Class *carg, int forceva)
 {
 	int va, envc, ngp, nfp, *gp, *fp;
 	Class *c;
 	Ins *i;
 
-	va = 0;
+	va = forceva;
 	envc = 0;
 	gp = gpreg;
 	fp = fpreg;
@@ -243,6 +243,8 @@ argsclass(Ins *i0, Ins *i1, Class *carg)
 			c->size = 8;
 			if (T.apple && !KWIDE(i->cls))
 				c->size = 4;
+			if (T.windows)
+				c->size = 8;
 		Scalar:
 			c->align = c->size;
 			*c->cls = i->cls;
@@ -267,6 +269,18 @@ argsclass(Ins *i0, Ins *i1, Class *carg)
 		case Oparc:
 		case Oargc:
 			typclass(c, &typ[i->arg[0].val], gp, fp);
+			if (T.windows && va && !(c->class & Cptr)) {
+				/* Windows ARM64 variadics never use
+				 * SIMD/FP registers and treat every
+				 * composite argument as an 8-byte
+				 * aligned stack slot. */
+				c->class |= Cstk;
+				c->ngp = 0;
+				c->nfp = 0;
+				c->align = 8;
+				c->size = (c->size + 7) & -8;
+				break;
+			}
 			if (c->ngp <= ngp) {
 				if (c->nfp <= nfp) {
 					ngp -= c->ngp;
@@ -287,7 +301,7 @@ argsclass(Ins *i0, Ins *i1, Class *carg)
 			envc = 1;
 			break;
 		case Oargv:
-			va = T.apple != 0;
+			va = (T.apple || T.windows) != 0;
 			break;
 		default:
 			die("unreachable");
@@ -368,12 +382,18 @@ selcall(Fn *fn, Ins *i0, Ins *i1, Insl **ilp)
 {
 	Ins *i;
 	Class *ca, *c, cr;
-	int op, cty;
-	uint n, stk, off;;
+	int op, cty, winva;
+	uint n, stk, off, slot;
 	Ref r, rstk, tmp[4];
 
+	winva = 0;
+	if (T.windows)
+		for (i=i0; i<i1; i++)
+			if (i->op == Oargv)
+				winva = 1;
+
 	ca = alloc((i1-i0) * sizeof ca[0]);
-	cty = argsclass(i0, i1, ca);
+	cty = argsclass(i0, i1, ca, winva);
 
 	stk = 0;
 	for (i=i0, c=ca; i<i1; i++, c++) {
@@ -388,6 +408,16 @@ selcall(Fn *fn, Ins *i0, Ins *i1, Insl **ilp)
 		}
 	}
 	stk = align(stk, 16);
+	if (winva) {
+		/* the first 64 bytes of the imaginary
+		 * stack are also passed in x0-x7 */
+		for (slot=0, i=i0, c=ca; i<i1; i++, c++)
+			if (c->class & Cstk)
+				slot += (c->size + 7) / 8;
+		if (slot > 8)
+			slot = 8;
+		cty = (cty & ~(15 << 5)) | (slot << 5);
+	}
 	rstk = getcon(stk, fn);
 	if (stk)
 		emit(Oadd, Kl, TMP(SP), TMP(SP), rstk);
@@ -433,6 +463,25 @@ selcall(Fn *fn, Ins *i0, Ins *i1, Insl **ilp)
 			emit(Ocopy, *c->cls, TMP(*c->reg), i->arg[0], R);
 		if (i->op == Oargc)
 			ldregs(c->reg, c->cls, c->nreg, i->arg[1], fn);
+	}
+
+	if (winva) {
+		/* mirror the leading stack slots into x0-x7 */
+		off = 0;
+		slot = 0;
+		for (i=i0, c=ca; i<i1; i++, c++) {
+			uint k, nslot;
+			if ((c->class & Cstk) == 0)
+				continue;
+			off = align(off, c->align);
+			nslot = (c->size + 7) / 8;
+			for (k=0; k<nslot && slot<8; k++, slot++) {
+				r = newtmp("abi", Kl, fn);
+				emit(Oload, Kl, TMP(R0+slot), r, R);
+				emit(Oadd, Kl, r, TMP(SP), getcon(off + 8*k, fn));
+			}
+			off += c->size;
+		}
 	}
 
 	/* populate the stack */
@@ -482,7 +531,7 @@ selpar(Fn *fn, Ins *i0, Ins *i1)
 	ca = alloc((i1-i0) * sizeof ca[0]);
 	curi = &insb[NIns];
 
-	cty = argsclass(i0, i1, ca);
+	cty = argsclass(i0, i1, ca, T.windows && fn->vararg);
 	fn->reg = arm64_argregs(CALL(cty), 0);
 
 	il = 0;
@@ -773,13 +822,13 @@ arm64_abi(Fn *fn)
 				i = i0;
 				break;
 			case Ovastart:
-				if (T.apple)
+				if (T.apple || T.windows)
 					apple_selvastart(fn, p, i->arg[0]);
 				else
 					arm64_selvastart(fn, p, i->arg[0]);
 				break;
 			case Ovaarg:
-				if (T.apple)
+				if (T.apple || T.windows)
 					apple_selvaarg(fn, b, i);
 				else
 					arm64_selvaarg(fn, b, i);

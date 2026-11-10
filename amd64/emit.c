@@ -592,7 +592,8 @@ emitins(Ins i, E *e)
 			emitcon(con, e);
 			if (con->type == CAddr
 			&& (con->sym.type & SExt)
-			&& !T.apple)
+			&& !T.apple
+			&& !T.windows)
 				fprintf(e->f, "@plt");
 			fprintf(e->f, "\n");
 			break;

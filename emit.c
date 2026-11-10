@@ -21,6 +21,8 @@ emitlnk(char *n, Lnk *l, int s, FILE *f)
 
 	pfx = n[0] == '"' ? "" : T.assym;
 	sfx = "";
+	if (T.windows && l->thread)
+		die("thread-local storage is not supported on windows targets");
 	if (T.apple && l->thread) {
 		l->sec = "__DATA";
 		l->secf = "__thread_data,thread_local_regular";
@@ -79,13 +81,22 @@ emitdat(Dat *d, FILE *f)
 		break;
 	case DEnd:
 		if (d->lnk->common) {
+			int lg;
 			if (zero == -1)
 				die("invalid common data definition");
 			p = d->name[0] == '"' ? "" : T.assym;
 			fprintf(f, ".comm %s%s,%"PRId64,
 				p, d->name, zero);
-			if (d->lnk->align)
-				fprintf(f, ",%d", d->lnk->align);
+			if (d->lnk->align) {
+				if (T.windows) {
+					/* COFF takes a log2 alignment and
+					 * refuses values above 32 bytes */
+					for (lg=0; (1<<lg) < d->lnk->align && lg < 5; lg++)
+						;
+					fprintf(f, ",%d", lg);
+				} else
+					fprintf(f, ",%d", d->lnk->align);
+			}
 			fputc('\n', f);
 		}
 		else if (zero != -1) {
@@ -231,7 +242,7 @@ macho_emitfin(FILE *f)
 void
 pe_emitfin(FILE *f)
 {
-	static char *sec[3] = { ".rodata", ".rodata", ".rodata" };
+	static char *sec[3] = { ".rdata", ".rdata", ".rdata" };
 
 	emitfin(f, sec);
 }

@@ -296,6 +296,14 @@ loadaddr(Con *c, char *rn, E *e)
 		if (T.apple)
 			s = "\tadrp\tR, S@gotpage\n"
 			    "\tldr\tR, [R, S@gotpageoff]\n";
+		else if (T.windows)
+			/* COFF does not support the GNU :got:
+			 * relocation variants.  Direct PC-relative
+			 * references work for symbols linked into
+			 * the same image; DLL imports need an
+			 * import library and __imp_ indirection. */
+			s = "\tadrp\tR, SO\n"
+			    "\tadd\tR, R, #:lo12:SO\n";
 		else
 			s = "\tadrp\tR, :got:S\n"
 			    "\tldr\tR, [R, #:got_lo12:S]\n";
@@ -564,7 +572,7 @@ arm64_emitfn(Fn *fn, FILE *out)
 	fputs("\thint\t#34\n", e->f);
 	framelayout(e);
 
-	if (e->fn->vararg && !T.apple) {
+	if (e->fn->vararg && !T.apple && !T.windows) {
 		for (n=7; n>=0; n--)
 			fprintf(e->f, "\tstr\tq%d, [sp, -16]!\n", n);
 		for (n=7; n>=0; n-=2)
@@ -629,7 +637,7 @@ arm64_emitfn(Fn *fn, FILE *out)
 			if (e->fn->dynalloc)
 				fputs("\tmov sp, x29\n", e->f);
 			o = e->frame + 16;
-			if (e->fn->vararg && !T.apple)
+			if (e->fn->vararg && !T.apple && !T.windows)
 				o += 192;
 			if (o <= 504)
 				fprintf(e->f,
@@ -688,6 +696,6 @@ arm64_emitfn(Fn *fn, FILE *out)
 		}
 	}
 	id0 += e->fn->nblk;
-	if (!T.apple)
+	if (!T.apple && !T.windows)
 		elf_emitfnfin(fn->name, out);
 }
