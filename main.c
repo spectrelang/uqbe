@@ -137,6 +137,12 @@ main(int ac, char *av[])
 	char *f, *sep;
 	int c;
 
+	for (c=1; c<ac; c++)
+		if (strcmp(av[c], "-spectre-check") == 0) {
+			puts("qbe (spectre)");
+			exit(0);
+		}
+
 	T = Deftgt;
 	outf = stdout;
 	while ((c = getopt(ac, av, "hd:o:t:")) != -1)
@@ -188,6 +194,7 @@ main(int ac, char *av[])
 			}
 			fprintf(hf, "\n");
 			fprintf(hf, "\t%-11s dump debug information\n", "-d <flags>");
+			fprintf(hf, "\t%-11s confirm the Spectre QBE variant\n", "-spectre-check");
 			exit(c != 'h');
 		}
 
