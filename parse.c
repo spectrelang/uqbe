@@ -240,7 +240,7 @@ lex()
 
 	do
 		c = fgetc(inf);
-	while (isblank(c));
+	while (isblank(c) || c == '\r');
 	t = Txxx;
 	tokval.chr = c;
 	switch (c) {
