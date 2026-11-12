@@ -1,5 +1,12 @@
 #include "all.h"
 
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
 typedef struct Ext Ext;
 
 struct Ext {

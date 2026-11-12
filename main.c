@@ -1,7 +1,11 @@
 #include "all.h"
 #include "config.h"
 #include <ctype.h>
+#ifdef _WIN32
+#include "getopt.h"
+#else
 #include <getopt.h>
+#endif
 
 #ifndef GIT_COMMIT
 #define GIT_COMMIT "unknown"
