@@ -3,6 +3,10 @@
 #include <ctype.h>
 #include <getopt.h>
 
+#ifndef GIT_COMMIT
+#define GIT_COMMIT "unknown"
+#endif
+
 Target T;
 
 char debug['Z'+1] = {
@@ -145,7 +149,7 @@ main(int ac, char *av[])
 
 	T = Deftgt;
 	outf = stdout;
-	while ((c = getopt(ac, av, "hd:o:t:")) != -1)
+	while ((c = getopt(ac, av, "hd:o:t:v")) != -1)
 		switch (c) {
 		case 'd':
 			for (; *optarg; optarg++)
@@ -179,6 +183,9 @@ main(int ac, char *av[])
 				}
 			}
 			break;
+		case 'v':
+			printf("uqbe (spectre) %s\n", GIT_COMMIT);
+			exit(0);
 		case 'h':
 		default:
 			hf = c != 'h' ? stderr : stdout;
@@ -194,6 +201,7 @@ main(int ac, char *av[])
 			}
 			fprintf(hf, "\n");
 			fprintf(hf, "\t%-11s dump debug information\n", "-d <flags>");
+			fprintf(hf, "\t%-11s print version and commit\n", "-v");
 			fprintf(hf, "\t%-11s confirm the Spectre QBE variant\n", "-spectre-check");
 			exit(c != 'h');
 		}

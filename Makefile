@@ -29,8 +29,9 @@ $(ARM64OBJ): arm64/all.h
 $(RV64OBJ): rv64/all.h
 main.o: config.h
 
-config.h:
-	@case `uname` in                               \
+config.h: FORCE
+	@ {                                            \
+	case `uname` in                                \
 	*MINGW*|*MSYS*|*CYGWIN*|*Windows*)             \
 		case `uname -m` in                     \
 		*aarch64*|*arm64*)                     \
@@ -64,7 +65,12 @@ config.h:
 			;;                             \
 		esac                                   \
 		;;                                     \
-	esac > $@
+	esac;                                          \
+	printf '#define GIT_COMMIT "%s"\n'            \
+		"`git rev-parse --short HEAD 2>/dev/null || echo unknown`"; \
+	} > $@
+
+FORCE:
 
 install: qbe
 	mkdir -p "$(DESTDIR)$(BINDIR)"
@@ -110,4 +116,4 @@ src:
 wc:
 	@wc -l $(SRCALL)
 
-.PHONY: clean clean-gen check check-arm64 check-rv64 check-amd64_win src 80 wc install uninstall
+.PHONY: clean clean-gen check check-arm64 check-rv64 check-amd64_win src 80 wc install uninstall FORCE
