@@ -137,6 +137,70 @@ dbgfile(char *fn)
 	emitdbgfile(fn, outf);
 }
 
+/* Windows shells sometimes write redirected text as UTF-16.  Accept the
+ * common BOMs so generated IL can be fed back without a separate conversion
+ * step.  IL itself is ASCII, so keeping the low byte of each UTF-16 unit is
+ * sufficient. */
+static FILE *
+openinput(char *path)
+{
+	FILE *f, *tmp;
+	int c0, c1, c2, lo, hi;
+
+	f = fopen(path, "rb");
+	if (!f)
+		return 0;
+
+	c0 = fgetc(f);
+	c1 = fgetc(f);
+
+	if (c0 == 0xff && c1 == 0xfe) {
+		tmp = tmpfile();
+		if (!tmp) {
+			fclose(f);
+			return 0;
+		}
+		while ((lo = fgetc(f)) != EOF) {
+			hi = fgetc(f);
+			if (hi == EOF)
+				break;
+			fputc(lo, tmp);
+		}
+		fclose(f);
+		rewind(tmp);
+		return tmp;
+	}
+
+	if (c0 == 0xfe && c1 == 0xff) {
+		tmp = tmpfile();
+		if (!tmp) {
+			fclose(f);
+			return 0;
+		}
+		while ((hi = fgetc(f)) != EOF) {
+			lo = fgetc(f);
+			if (lo == EOF)
+				break;
+			fputc(lo, tmp);
+		}
+		fclose(f);
+		rewind(tmp);
+		return tmp;
+	}
+
+	if (c0 == 0xef && c1 == 0xbb) {
+		c2 = fgetc(f);
+		if (c2 == 0xbf) {
+			rewind(f);
+			fseek(f, 3, SEEK_SET);
+			return f;
+		}
+	}
+
+	rewind(f);
+	return f;
+}
+
 int
 main(int ac, char *av[])
 {
@@ -216,7 +280,7 @@ main(int ac, char *av[])
 			inf = stdin;
 			f = "-";
 		} else {
-			inf = fopen(f, "r");
+			inf = openinput(f);
 			if (!inf) {
 				fprintf(stderr, "cannot open '%s'\n", f);
 				exit(1);
