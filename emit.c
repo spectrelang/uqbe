@@ -347,6 +347,13 @@ dbgref(FILE *f, char *kind, uint id)
 }
 
 static void
+dbgrefdiff(FILE *f, char *ekind, uint eid, char *bkind, uint bid)
+{
+	fprintf(f, "\t.quad %s%s%u - %s%s%u\n",
+		T.asloc, ekind, eid, T.asloc, bkind, bid);
+}
+
+static void
 dbgsetaddr(FILE *f, char *kind, uint id)
 {
 	fprintf(f, "\t.byte 0\n");
@@ -494,13 +501,13 @@ emitdwarffin(FILE *f)
 	fputs("\t.byte 0x13, 0x05\n", f);
 	fputs("\t.byte 0x03, 0x08\n", f);
 	fputs("\t.byte 0x11, 0x01\n", f);
-	fputs("\t.byte 0x12, 0x01\n", f);
+	fputs("\t.byte 0x12, 0x07\n", f);
 	fputs("\t.byte 0x10, 0x17\n", f);
 	fputs("\t.byte 0, 0\n", f);
 	fputs("\t.byte 2, 0x2e, 0\n", f);
 	fputs("\t.byte 0x03, 0x08\n", f);
 	fputs("\t.byte 0x11, 0x01\n", f);
-	fputs("\t.byte 0x12, 0x01\n", f);
+	fputs("\t.byte 0x12, 0x07\n", f);
 	fputs("\t.byte 0x3f, 0x19\n", f);
 	fputs("\t.byte 0, 0\n", f);
 	fputs("\t.byte 0\n", f);
@@ -586,7 +593,8 @@ emitdwarffin(FILE *f)
 	fputs("\t.short 0x000c\n", f);
 	fprintf(f, "\t.asciz \"%s\"\n", files[dfns[first].file - 1]);
 	dbgref(f, "dbgfn_begin", dfns[first].start);
-	dbgref(f, "dbgfn_end", dfns[last].end);
+	dbgrefdiff(f, "dbgfn_end", dfns[last].end,
+		"dbgfn_begin", dfns[first].start);
 	if (T.apple)
 		fputs("\t.long 0\n", f);
 	else
@@ -597,7 +605,8 @@ emitdwarffin(FILE *f)
 		fputs("\t.byte 2\n", f);
 		fprintf(f, "\t.asciz \"%s\"\n", dfns[i].name);
 		dbgref(f, "dbgfn_begin", dfns[i].start);
-		dbgref(f, "dbgfn_end", dfns[i].end);
+		dbgrefdiff(f, "dbgfn_end", dfns[i].end,
+			"dbgfn_begin", dfns[i].start);
 	}
 	fputs("\t.byte 0\n", f);
 	fprintf(f, "%sdebug_info_end:\n", T.asloc);

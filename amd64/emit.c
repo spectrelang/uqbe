@@ -9,6 +9,7 @@ struct E {
 	int fp;
 	uint64_t fsz;
 	int nclob;
+	int useflags;
 };
 
 #define CMP(X) \
@@ -243,6 +244,26 @@ getarg(char c, Ins *i)
 
 static void emitins(Ins, E *);
 
+/* Check whether the flags produced by instruction i may still be
+ * observed later in the block. Instructions that leave the flags
+ * untouched are scanned over; the first clobbering instruction ends
+ * the search.
+ */
+static int
+flagsneeded(Blk *b, Ins *i)
+{
+	for (i++; i<&b->ins[b->nins]; i++) {
+		if (INRANGE(i->op, Oflag, Oflag1) || isxsel(i->op))
+			return 1;
+		if (i->op == Onop || i->op == Ocopy || i->op == Odbgloc
+		|| isload(i->op) || isstore(i->op)
+		|| amd64_op[i->op].lflag)
+			continue;
+		return 0;
+	}
+	return INRANGE(b->jmp.type, Jjf, Jjf1);
+}
+
 static void
 emitcopy(Ref r1, Ref r2, int k, E *e)
 {
@@ -417,6 +438,19 @@ emitins(Ins i, E *e)
 		if (isxsel(i.op))
 			goto case_Oxsel;
 	Table:
+		/* Comparing against zero only needs the value, and
+		 * test is a shorter encoding than cmp with an
+		 * immediate. */
+		if (i.op == Oxcmp && KBASE(i.cls) == 0
+		&& rtype(i.arg[0]) == RCon
+		&& rtype(i.arg[1]) == RTmp) {
+			con = &e->fn->con[i.arg[0].val];
+			if (con->type == CBits && con->bits.i == 0) {
+				i.arg[0] = i.arg[1];
+				emitf("test%k %0, %1", &i, e);
+				break;
+			}
+		}
 		/* most instructions are just pulled out of
 		 * the table omap[], some special cases are
 		 * detailed below */
@@ -453,7 +487,61 @@ emitins(Ins i, E *e)
 			break;
 		}
 		goto Table;
+	case Oadd:
+		/* A three-address add can often be done with a single
+		 * lea instead of a mov followed by add. This only
+		 * works when the flags produced by the add are dead.
+		 */
+		if (KBASE(i.cls) == 0 && !e->useflags
+		&& isreg(i.to)
+		&& !req(i.to, i.arg[0]) && !req(i.to, i.arg[1])) {
+			if (rtype(i.arg[0]) == RTmp
+			&& rtype(i.arg[1]) == RTmp) {
+				if (i.cls == Kw)
+					emitf("leal (%L0, %L1), %W=", &i, e);
+				else
+					emitf("leaq (%L0, %L1), %L=", &i, e);
+				break;
+			}
+			if (rtype(i.arg[0]) == RCon
+			&& rtype(i.arg[1]) == RTmp) {
+				r = i.arg[0];
+				i.arg[0] = i.arg[1];
+				i.arg[1] = r;
+			}
+			if (rtype(i.arg[0]) == RTmp
+			&& rtype(i.arg[1]) == RCon) {
+				con = &e->fn->con[i.arg[1].val];
+				if (con->type == CBits
+				&& con->bits.i >= INT32_MIN
+				&& con->bits.i <= INT32_MAX) {
+					if (i.cls == Kw)
+						emitf("leal %M1(%L0), %W=", &i, e);
+					else
+						emitf("leaq %M1(%L0), %L=", &i, e);
+					break;
+				}
+			}
+		}
+		goto Table;
 	case Osub:
+		if (KBASE(i.cls) == 0 && !e->useflags && isreg(i.to)) {
+			if (!req(i.to, i.arg[0]) && !req(i.to, i.arg[1])
+			&& rtype(i.arg[0]) == RTmp
+			&& rtype(i.arg[1]) == RCon) {
+				con = &e->fn->con[i.arg[1].val];
+				val = con->bits.i;
+				if (con->type == CBits && val > 0
+				&& val <= INT32_MAX) {
+					char fmt[64];
+					sprintf(fmt,
+						"lea%%k -%"PRId64"(%%L0), %%%c=",
+						val, i.cls == Kw ? 'W' : 'L');
+					emitf(fmt, &i, e);
+					break;
+				}
+			}
+		}
 		/* we have to use the negation trick to handle
 		 * some 3-address subtractions */
 		if (req(i.to, i.arg[1]) && !req(i.arg[0], i.to)) {
@@ -477,6 +565,12 @@ emitins(Ins i, E *e)
 				regtoa(i.to.val, SLong)
 			);
 		break;
+	case Oxmulhu:
+		/* unsigned high half of a 64-bit multiply;
+		 * the multiplicand is in %rax, the result in %rdx
+		 */
+		emitf("mul%k %0", &i, e);
+		break;
 	case Odiv:
 		/* use xmm15 to adjust the instruction when the
 		 * conversion to 2-address in emitf() would fail */
@@ -496,6 +590,16 @@ emitins(Ins i, E *e)
 			break;
 		if (req(i.to, i.arg[0]))
 			break;
+		/* Zeroing a register with xor is shorter and does not
+		 * need an execution unit, but it clobbers the flags. */
+		if (KBASE(i.cls) == 0 && !e->useflags && isreg(i.to)
+		&& rtype(i.arg[0]) == RCon) {
+			con = &e->fn->con[i.arg[0].val];
+			if (con->type == CBits && con->bits.i == 0) {
+				emitf("xorl %W=, %W=", &i, e);
+				break;
+			}
+		}
 		t0 = rtype(i.arg[0]);
 		if (i.cls == Kl
 		&& t0 == RCon
@@ -709,8 +813,10 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 				fprintf(f, ".p2align 4\n");
 			fprintf(f, "%sbb%d:\n", T.asloc, id0+b->id);
 		}
-		for (i=b->ins; i!=&b->ins[b->nins]; i++)
+		for (i=b->ins; i!=&b->ins[b->nins]; i++) {
+			e->useflags = flagsneeded(b, i);
 			emitins(*i, e);
+		}
 		lbl = 1;
 		switch (b->jmp.type) {
 		case Jhlt:
@@ -827,8 +933,10 @@ amd64_winabi_emitfn(Fn *fn, FILE *f)
 	for (lbl=0, b=fn->start; b; b=b->link) {
 		if (lbl || b->npred > 1)
 			fprintf(f, "%sbb%d:\n", T.asloc, id0+b->id);
-		for (i=b->ins; i!=&b->ins[b->nins]; i++)
+		for (i=b->ins; i!=&b->ins[b->nins]; i++) {
+			e->useflags = flagsneeded(b, i);
 			emitins(*i, e);
+		}
 		lbl = 1;
 		switch (b->jmp.type) {
 		case Jhlt:

@@ -252,6 +252,256 @@ selcmp(Ref arg[2], int k, int swap, Fn *fn)
 	fixarg(&icmp->arg[1], k, icmp, fn);
 }
 
+typedef struct DSeq DSeq;
+
+struct DSeq {
+	Ins i[32];
+	int n;
+};
+
+static void
+dsadd(DSeq *s, int op, int cls, Ref to, Ref a0, Ref a1)
+{
+	assert(s->n < (int)(sizeof s->i / sizeof s->i[0]));
+	s->i[s->n++] = (Ins){.op=op, .cls=cls, .to=to,
+		.arg={a0, a1}};
+}
+
+static void
+dsemit(DSeq *s)
+{
+	while (s->n > 0) {
+		s->n--;
+		emit(s->i[s->n].op, s->i[s->n].cls, s->i[s->n].to,
+			s->i[s->n].arg[0], s->i[s->n].arg[1]);
+	}
+}
+
+/* Compute a magic number for unsigned division by a constant.
+ * A plain multiply-and-shift is preferred when it is exact; other
+ * divisors use the add-correction form.
+ */
+static int
+dmagic(uint64_t d, int w, uint64_t *pm, int *ps, int *padd)
+{
+#if defined(__SIZEOF_INT128__)
+	__extension__ typedef unsigned __int128 u128;
+	u128 num, m, e;
+	uint64_t t;
+	int bits, l, sh;
+
+	if (d <= 1 || (d & (d-1)) == 0)
+		return 0;
+	/* Divisors of 2^63 and above would need a 128-bit shift
+	 * to build the magic; leave them to idiv. */
+	if (d >= ((uint64_t)1 << 63))
+		return 0;
+	bits = w ? 64 : 32;
+	for (t=d, l=0; t>1; t>>=1)
+		l++;
+	/* Prefer a plain multiply followed by a shift when it is
+	 * exact; this saves the add correction below. */
+	for (sh=l; sh<bits; sh++) {
+		num = ((u128)1) << (bits + sh);
+		m = (num + d - 1) / d;
+		if (m >= (((u128)1) << bits))
+			continue;
+		e = m * d - num;
+		if (e < (((u128)1) << sh)) {
+			*pm = (uint64_t)m;
+			*ps = sh;
+			*padd = 0;
+			return 1;
+		}
+	}
+	l++;
+	num = ((u128)1) << (bits + l);
+	m = num / d + 1;
+	*pm = (uint64_t)(m - (((u128)1) << bits));
+	*ps = l - 1;
+	*padd = 1;
+	return 1;
+#else
+	(void)d; (void)w; (void)pm; (void)ps; (void)padd;
+	return 0;
+#endif
+}
+
+static int
+pow2(uint64_t d)
+{
+	return d && !(d & (d-1));
+}
+
+/* Append the instructions computing the unsigned quotient x/d.
+ * Both x and the result have class cls.
+ */
+static Ref
+genudivq(DSeq *s, Ref x, int cls, uint64_t d, Fn *fn)
+{
+	uint64_t magic;
+	Ref t, mt, u, v, q, xl, p;
+	int sh, k, add;
+
+	if (d == 1)
+		return x;
+	if (pow2(d)) {
+		for (k=0; (1ull<<k) < d; k++)
+			;
+		q = newtmp("divc", cls, fn);
+		dsadd(s, Oshr, cls, q, x, getcon(k, fn));
+		return q;
+	}
+	if (!dmagic(d, cls == Kl, &magic, &sh, &add))
+		return R;
+	mt = newtmp("divc", Kl, fn);
+	dsadd(s, Ocopy, Kl, mt, getcon((int64_t)magic, fn), R);
+	if (cls == Kl) {
+		xl = x;
+		dsadd(s, Ocopy, Kl, TMP(RAX), x, R);
+		dsadd(s, Ocopy, Kl, R, TMP(RAX), R);
+		dsadd(s, Ocopy, Kl, TMP(RDX), getcon(0, fn), R);
+		t = newtmp("divc", Kl, fn);
+		dsadd(s, Oxmulhu, Kl, R, mt, R);
+		dsadd(s, Ocopy, Kl, t, TMP(RDX), R);
+	} else {
+		xl = newtmp("divc", Kl, fn);
+		dsadd(s, Oextuw, Kl, xl, x, R);
+		p = newtmp("divc", Kl, fn);
+		dsadd(s, Omul, Kl, p, xl, mt);
+		t = newtmp("divc", Kl, fn);
+		dsadd(s, Oshr, Kl, t, p, getcon(32, fn));
+	}
+	q = t;
+	if (add) {
+		u = newtmp("divc", Kl, fn);
+		dsadd(s, Osub, Kl, u, xl, t);
+		v = newtmp("divc", Kl, fn);
+		dsadd(s, Oshr, Kl, v, u, getcon(1, fn));
+		q = newtmp("divc", Kl, fn);
+		dsadd(s, Oadd, Kl, q, t, v);
+	}
+	if (sh > 0) {
+		u = newtmp("divc", Kl, fn);
+		dsadd(s, Oshr, Kl, u, q, getcon(sh, fn));
+		q = u;
+	}
+	if (cls == Kw) {
+		xl = newtmp("divc", Kw, fn);
+		dsadd(s, Ocopy, Kw, xl, q, R);
+		q = xl;
+	}
+	return q;
+}
+
+/* Append the instructions computing the signed quotient x/d. */
+static Ref
+gensdivq(DSeq *s, Ref x, int cls, int64_t d, Fn *fn)
+{
+	uint64_t ad;
+	Ref sg, ux, q, mask, t;
+
+	if (d == 1)
+		return x;
+	if (d == 0 || d == -1 || d == INT64_MIN)
+		return R;
+	ad = d < 0 ? (uint64_t)-d : (uint64_t)d;
+	if (ad > INT32_MAX)
+		return R;
+	sg = newtmp("divc", cls, fn);
+	dsadd(s, Osar, cls, sg, x, getcon(cls == Kl ? 63 : 31, fn));
+	ux = newtmp("divc", cls, fn);
+	dsadd(s, Oxor, cls, ux, x, sg);
+	dsadd(s, Osub, cls, ux, ux, sg);
+	q = genudivq(s, ux, cls, ad, fn);
+	if (req(q, R))
+		return R;
+	if (d < 0) {
+		mask = newtmp("divc", cls, fn);
+		dsadd(s, Oxor, cls, mask, sg, getcon(-1, fn));
+	} else
+		mask = sg;
+	t = newtmp("divc", cls, fn);
+	dsadd(s, Oxor, cls, t, q, mask);
+	q = newtmp("divc", cls, fn);
+	dsadd(s, Osub, cls, q, t, mask);
+	return q;
+}
+
+static int
+seldivcon(Ins i, Fn *fn)
+{
+	uint64_t du;
+	int64_t ds;
+	Con *c;
+	DSeq s;
+	Ref q, d, p;
+	int w;
+
+	if (KBASE(i.cls) != 0)
+		return 0;
+	if (rtype(i.arg[0]) != RTmp
+	|| fn->tmp[i.arg[0].val].slot != -1)
+		return 0;
+	if (rtype(i.arg[1]) != RCon)
+		return 0;
+	c = &fn->con[i.arg[1].val];
+	if (c->type != CBits)
+		return 0;
+	w = i.cls == Kl;
+	ds = w ? c->bits.i : (int64_t)(int32_t)c->bits.i;
+	du = w ? (uint64_t)c->bits.i : (uint64_t)(uint32_t)c->bits.i;
+	if (ds == 0 || du == 0)
+		return 0;
+	if ((i.op == Odiv || i.op == Orem)
+	&& (ds == -1 || ds == INT64_MIN))
+		return 0;
+	if ((i.op == Oudiv || i.op == Ourem)
+	&& !pow2(du) && du >= ((uint64_t)1 << 63))
+		return 0;
+
+	s.n = 0;
+	switch (i.op) {
+	case Odiv:
+		q = gensdivq(&s, i.arg[0], i.cls, ds, fn);
+		break;
+	case Orem:
+		q = gensdivq(&s, i.arg[0], i.cls, ds, fn);
+		break;
+	case Oudiv:
+		q = genudivq(&s, i.arg[0], i.cls, du, fn);
+		break;
+	case Ourem:
+		q = genudivq(&s, i.arg[0], i.cls, du, fn);
+		break;
+	default:
+		return 0;
+	}
+	if (req(q, R)) {
+		s.n = 0;
+		return 0;
+	}
+	if (i.op == Odiv || i.op == Oudiv) {
+		if (!req(q, i.to))
+			dsadd(&s, Ocopy, i.cls, i.to, q, R);
+	} else {
+		if (w) {
+			d = newtmp("divc", Kl, fn);
+			dsadd(&s, Ocopy, Kl, d,
+				getcon(i.op == Orem ? ds : (int64_t)du, fn), R);
+			p = newtmp("divc", Kl, fn);
+			dsadd(&s, Omul, Kl, p, q, d);
+		} else {
+			p = newtmp("divc", Kw, fn);
+			dsadd(&s, Omul, Kw, p, q,
+				getcon(i.op == Orem ? ds : (int64_t)du, fn));
+		}
+		dsadd(&s, Osub, i.cls, i.to, i.arg[0], p);
+	}
+	dsemit(&s);
+	return 1;
+}
+
 static void
 sel(Ins i, Num *tn, Fn *fn)
 {
@@ -275,6 +525,8 @@ sel(Ins i, Num *tn, Fn *fn)
 	case Ourem:
 		if (KBASE(k) == 1)
 			goto Emit;
+		if (seldivcon(i, fn))
+			break;
 		if (i.op == Odiv || i.op == Oudiv)
 			r0 = TMP(RAX), r1 = TMP(RDX);
 		else
