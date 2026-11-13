@@ -431,7 +431,29 @@ emitins(Ins i, E *e)
 	int o, t0;
 	Ins ineg;
 	Con *con;
-	char *sym;
+	char *sym, *mn;
+	char fmt[64];
+
+	/* VEX scalar arithmetic removes the copy needed by the
+	 * two-address SSE forms. Memory may only be the second
+	 * source, so keep memory operands on the right. */
+	if (cpu_avx && KBASE(i.cls) == 1 && isreg(i.to)
+	&& rtype(i.arg[0]) == RTmp
+	&& !req(i.to, i.arg[0]) && !req(i.to, i.arg[1])
+	&& rtype(i.arg[1]) != RCon) {
+		switch (i.op) {
+		case Oadd: mn = "add"; break;
+		case Osub: mn = "sub"; break;
+		case Omul: mn = "mul"; break;
+		case Odiv: mn = "div"; break;
+		default:   mn = 0; break;
+		}
+		if (mn) {
+			sprintf(fmt, "v%s%%k %%1, %%0, %%=", mn);
+			emitf(fmt, &i, e);
+			return;
+		}
+	}
 
 	switch (i.op) {
 	default:
@@ -468,6 +490,22 @@ emitins(Ins i, E *e)
 		}
 		emitf(omap[o].fmt, &i, e);
 		break;
+	case Oshl:
+	case Oshr:
+	case Osar:
+		if (cpu_bmi2 && isreg(i.to)
+		&& rtype(i.arg[1]) == RTmp) {
+			switch (i.op) {
+			case Oshl: mn = "shlx"; break;
+			case Oshr: mn = "shrx"; break;
+			default:   mn = "sarx"; break;
+			}
+			sprintf(fmt, "%s%%k %%1, %%0, %%%c=", mn,
+				i.cls == Kw ? 'W' : 'L');
+			emitf(fmt, &i, e);
+			break;
+		}
+		goto Table;
 	case Onop:
 		/* just do nothing for nops, they are inserted
 		 * by some passes */

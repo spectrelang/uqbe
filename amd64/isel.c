@@ -561,6 +561,15 @@ sel(Ins i, Num *tn, Fn *fn)
 		r0 = i.arg[1];
 		if (rtype(r0) == RCon)
 			goto Emit;
+		if (cpu_bmi2) {
+			/* shlx/shrx/sarx take the count in any
+			 * register, so no move to %rcx is needed */
+			emiti(i);
+			i1 = curi;
+			fixarg(&i1->arg[0], argcls(&i, 0), i1, fn);
+			fixarg(&i1->arg[1], argcls(&i, 1), i1, fn);
+			break;
+		}
 		if (fn->tmp[r0.val].slot != -1)
 			err("unlikely argument %%%s in %s",
 				fn->tmp[r0.val].name, optab[i.op].name);

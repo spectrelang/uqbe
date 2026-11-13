@@ -470,6 +470,9 @@ struct Dat {
 /* main.c */
 extern Target T;
 extern char debug['Z'+1];
+extern int cpu_native;
+extern int cpu_bmi2;
+extern int cpu_avx;
 extern int emitdbg;
 
 /* util.c */

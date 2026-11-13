@@ -6,6 +6,9 @@
 #else
 #include <getopt.h>
 #endif
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+#include <cpuid.h>
+#endif
 
 #ifndef GIT_COMMIT
 #define GIT_COMMIT "unknown"
@@ -14,6 +17,33 @@
 Target T;
 
 int emitdbg;
+int cpu_native;
+int cpu_bmi2;
+int cpu_avx;
+
+static void
+detectcpu(void)
+{
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+	unsigned a, b, c, d, max;
+
+	max = __get_cpuid_max(0, 0);
+	if (max >= 7) {
+		__cpuid_count(7, 0, a, b, c, d);
+		cpu_bmi2 = !!(b & (1u << 8));
+		if (b & (1u << 5)) { /* AVX2 */
+			__cpuid(1, a, b, c, d);
+			if ((c & (1u << 27)) /* OSXSAVE */
+			&& (c & (1u << 28))) { /* AVX */
+				unsigned xl, xh;
+				__asm__ volatile("xgetbv"
+					: "=a"(xl), "=d"(xh) : "c"(0));
+				cpu_avx = ((xl & 6) == 6);
+			}
+		}
+	}
+#endif
+}
 
 char debug['Z' + 1] = {
     ['P'] = 0, /* parsing */
@@ -210,6 +240,23 @@ int main(int ac, char *av[]) {
       c--;
     }
 
+  for (c = 1; c < ac; c++)
+    if (strncmp(av[c], "-cpu:", 5) == 0) {
+      int j;
+
+      if (strcmp(av[c] + 5, "native") != 0) {
+        fprintf(stderr, "unknown cpu '%s'\n", av[c] + 5);
+        exit(1);
+      }
+      cpu_native = 1;
+      for (j = c; j < ac - 1; j++)
+        av[j] = av[j + 1];
+      ac--;
+      c--;
+    }
+  if (cpu_native)
+    detectcpu();
+
   T = Deftgt;
   outf = stdout;
   while ((c = getopt(ac, av, "hd:o:t:v")) != -1)
@@ -264,6 +311,7 @@ int main(int ac, char *av[]) {
       }
       fprintf(hf, "\n");
       fprintf(hf, "\t%-21s dump debug information\n", "-d <flags>");
+      fprintf(hf, "\t%-21s use native processor features\n", "-cpu:native");
       fprintf(hf, "\t%-21s emit platform debug information\n", "-emit-dbg");
       fprintf(hf, "\t%-21s print version and commit\n", "-v");
       fprintf(hf, "\t%-21s confirm the Spectre QBE variant\n",
