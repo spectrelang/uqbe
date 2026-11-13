@@ -277,6 +277,32 @@ dsemit(DSeq *s)
 	}
 }
 
+/* Divide the 128-bit value hi:lo by d, where hi < d < 2^63.
+ * The quotient therefore fits in 64 bits.  This avoids relying on
+ * a 128-bit division helper (e.g. __udivti3), which is not always
+ * available on Windows.
+ */
+static void
+udiv128by64(uint64_t hi, uint64_t lo, uint64_t d, uint64_t *pq, uint64_t *pr)
+{
+	uint64_t q, r;
+	int i;
+
+	assert(hi < d);
+	q = 0;
+	r = hi;
+	for (i=63; i>=0; i--) {
+		q <<= 1;
+		r = (r << 1) | ((lo >> i) & 1);
+		if (r >= d) {
+			r -= d;
+			q |= 1;
+		}
+	}
+	*pq = q;
+	*pr = r;
+}
+
 /* Compute a magic number for unsigned division by a constant.
  * A plain multiply-and-shift is preferred when it is exact; other
  * divisors use the add-correction form.
@@ -284,10 +310,7 @@ dsemit(DSeq *s)
 static int
 dmagic(uint64_t d, int w, uint64_t *pm, int *ps, int *padd)
 {
-#if defined(__SIZEOF_INT128__)
-	__extension__ typedef unsigned __int128 u128;
-	u128 num, m, e;
-	uint64_t t;
+	uint64_t hi, num, m, e, q, r, t;
 	int bits, l, sh;
 
 	if (d <= 1 || (d & (d-1)) == 0)
@@ -302,29 +325,39 @@ dmagic(uint64_t d, int w, uint64_t *pm, int *ps, int *padd)
 	/* Prefer a plain multiply followed by a shift when it is
 	 * exact; this saves the add correction below. */
 	for (sh=l; sh<bits; sh++) {
-		num = ((u128)1) << (bits + sh);
-		m = (num + d - 1) / d;
-		if (m >= (((u128)1) << bits))
+		if (bits + sh < 64) {
+			num = (uint64_t)1 << (bits + sh);
+			q = num / d;
+			r = num % d;
+		} else {
+			hi = (uint64_t)1 << (bits + sh - 64);
+			if (hi >= d)
+				continue;
+			udiv128by64(hi, 0, d, &q, &r);
+		}
+		m = q + (r != 0);
+		if (m < q)
 			continue;
-		e = m * d - num;
-		if (e < (((u128)1) << sh)) {
-			*pm = (uint64_t)m;
+		if (bits == 32 && m >= ((uint64_t)1 << bits))
+			continue;
+		e = r ? d - r : 0;
+		if (e < ((uint64_t)1 << sh)) {
+			*pm = m;
 			*ps = sh;
 			*padd = 0;
 			return 1;
 		}
 	}
 	l++;
-	num = ((u128)1) << (bits + l);
-	m = num / d + 1;
-	*pm = (uint64_t)(m - (((u128)1) << bits));
+	t = ((uint64_t)1 << l) - d;
+	if (bits == 64)
+		udiv128by64(t, 0, d, &m, &r);
+	else
+		m = (t << 32) / d;
+	*pm = m + 1;
 	*ps = l - 1;
 	*padd = 1;
 	return 1;
-#else
-	(void)d; (void)w; (void)pm; (void)ps; (void)padd;
-	return 0;
-#endif
 }
 
 static int
