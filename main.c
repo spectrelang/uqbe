@@ -13,6 +13,8 @@
 
 Target T;
 
+int emitdbg;
+
 char debug['Z' + 1] = {
     ['P'] = 0, /* parsing */
     ['M'] = 0, /* memory optimization */
@@ -114,6 +116,7 @@ static void func(Fn *fn) {
       fn->rpo[n]->link = fn->rpo[n + 1];
   if (!dbg) {
     T.emitfn(fn, outf);
+    emitdbgfnfin(fn->name, outf);
     fprintf(outf, "/* end function %s */\n\n", fn->name);
   } else
     fprintf(stderr, "\n");
@@ -196,6 +199,17 @@ int main(int ac, char *av[]) {
       exit(0);
     }
 
+  for (c = 1; c < ac; c++)
+    if (strcmp(av[c], "-emit-dbg") == 0) {
+      int j;
+
+      emitdbg = 1;
+      for (j = c; j < ac - 1; j++)
+        av[j] = av[j + 1];
+      ac--;
+      c--;
+    }
+
   T = Deftgt;
   outf = stdout;
   while ((c = getopt(ac, av, "hd:o:t:v")) != -1)
@@ -250,6 +264,7 @@ int main(int ac, char *av[]) {
       }
       fprintf(hf, "\n");
       fprintf(hf, "\t%-21s dump debug information\n", "-d <flags>");
+      fprintf(hf, "\t%-21s emit platform debug information\n", "-emit-dbg");
       fprintf(hf, "\t%-21s print version and commit\n", "-v");
       fprintf(hf, "\t%-21s confirm the Spectre QBE variant\n",
               "-spectre-check");
@@ -272,8 +287,10 @@ int main(int ac, char *av[]) {
     fclose(inf);
   } while (++optind < ac);
 
-  if (!dbg)
+  if (!dbg) {
     T.emitfin(outf);
+    emitdbgfin(outf);
+  }
 
   exit(0);
 }

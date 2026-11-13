@@ -470,6 +470,7 @@ struct Dat {
 /* main.c */
 extern Target T;
 extern char debug['Z'+1];
+extern int emitdbg;
 
 /* util.c */
 typedef enum {
@@ -624,6 +625,8 @@ void emitfnlnk(char *, Lnk *, FILE *);
 void emitdat(Dat *, FILE *);
 void emitdbgfile(char *, FILE *);
 void emitdbgloc(uint, uint, FILE *);
+void emitdbgfnfin(char *, FILE *);
+void emitdbgfin(FILE *);
 int stashbits(bits, int);
 void elf_emitfnfin(char *, FILE *);
 void elf_emitfin(FILE *);
