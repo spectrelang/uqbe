@@ -477,6 +477,45 @@ emitdbgloc(uint line, uint col, FILE *f)
 	d->line = line;
 }
 
+static uint
+cv_simple_type(int size, int enc)
+{
+	if (enc == 4) {
+		if (size == 4)
+			return 0x0040; /* T_REAL32 */
+		if (size == 8)
+			return 0x0041; /* T_REAL64 */
+	}
+	if (enc == 7) {
+		if (size == 1)
+			return 0x0069; /* T_UCHAR */
+		if (size == 2)
+			return 0x0073; /* T_UINT2 */
+		if (size == 4)
+			return 0x0075; /* T_UINT4 */
+		return 0x0077; /* T_UINT8 */
+	}
+	if (size == 1)
+		return 0x0068; /* T_CHAR */
+	if (size == 2)
+		return 0x0072; /* T_INT2 */
+	if (size == 4)
+		return 0x0074; /* T_INT4 */
+	return 0x0076; /* T_INT8 */
+}
+
+static uint
+cv_register(int reg)
+{
+	if (reg == 6)
+		return 334; /* CV_AMD64_RBP */
+	if (reg == 7)
+		return 335; /* CV_AMD64_RSP */
+	if (reg == 29)
+		return 79; /* CV_ARM64_FP */
+	return (uint)reg;
+}
+
 void
 emitdbgvar(DbgVar *v)
 {
@@ -746,6 +785,27 @@ emitdbgfin(FILE *f)
 			fprintf(f, "\t.asciz \"%s\"\n", dfns[i].name);
 			fputs("\t.p2align 2, 0x0\n", f);
 			fprintf(f, "%sdbgrec_end%u:\n", T.asloc, i);
+			{
+				uint j;
+				for (j=0; j<dfns[i].nvars; j++) {
+					DbgVar *dv = &dfns[i].vars[j];
+					fprintf(f,
+						"\t.short %sdbgvar_end%u_%u - %sdbgvar_start%u_%u\n",
+						T.asloc, i, j, T.asloc, i, j);
+					fprintf(f, "%sdbgvar_start%u_%u:\n",
+						T.asloc, i, j);
+					fputs("\t.short 0x1111\n", f);
+					fprintf(f, "\t.long %d\n", dv->locoff);
+					fprintf(f, "\t.long 0x%x\n",
+						cv_simple_type(dv->size, dv->enc));
+					fprintf(f, "\t.short %u\n",
+						cv_register(dv->locreg));
+					fprintf(f, "\t.asciz \"%s\"\n", dv->name);
+					fputs("\t.p2align 2, 0x0\n", f);
+					fprintf(f, "%sdbgvar_end%u_%u:\n",
+						T.asloc, i, j);
+				}
+			}
 			fputs("\t.short 2\n\t.short 0x114f\n", f);
 		}
 		fprintf(f, "%sdbgsym_end:\n", T.asloc);
