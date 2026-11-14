@@ -59,7 +59,22 @@ static void emitdbgfnstart(char *, FILE *);
 void
 emitfnlnk(char *n, Lnk *l, FILE *f)
 {
-	emitlnk(n, l, SecText, f);
+	char *pfx;
+
+	if (!T.windows || l->sec) {
+		emitlnk(n, l, SecText, f);
+	} else {
+		/* COFF uses one COMDAT section per function so that
+		 * lld-link's /opt:ref can discard unused runtime code.
+		 */
+		pfx = n[0] == '"' ? "" : T.assym;
+		fprintf(f, ".section .text,\"xr\",one_only,%s%s\n", pfx, n);
+		if (l->align)
+			fprintf(f, ".balign %d\n", l->align);
+		if (l->export)
+			fprintf(f, ".globl %s%s\n", pfx, n);
+		fprintf(f, "%s%s:\n", pfx, n);
+	}
 	emitdbgfnstart(n, f);
 }
 
