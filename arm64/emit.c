@@ -165,6 +165,26 @@ slot(Ref r, E *e)
 }
 
 static void
+emit_dbgvars(Fn *fn, E *e)
+{
+	uint i;
+	int s;
+	DbgVar *v;
+
+	for (i=0; i<(uint)fn->ndbgvars; i++) {
+		v = &fn->dbgvars[i];
+		if (v->tmp.type != RTmp)
+			continue;
+		s = fn->tmp[v->tmp.val].slot;
+		if (s < 0)
+			continue;
+		v->locreg = 29;
+		v->locoff = slot(SLOT(s), e);
+		emitdbgvar(v);
+	}
+}
+
+static void
 emitf(char *s, Ins *i, E *e)
 {
 	Ref r;
@@ -614,6 +634,7 @@ arm64_emitfn(Fn *fn, FILE *out)
 			i->op = *r >= V0 ? Ostored : Ostorel;
 			emitins(i, e);
 		}
+	emit_dbgvars(e->fn, e);
 
 	for (lbl=0, b=e->fn->start; b; b=b->link) {
 		if (lbl || b->npred > 1)

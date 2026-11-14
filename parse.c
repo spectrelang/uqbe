@@ -65,6 +65,7 @@ enum Token {
 	Tsection,
 	Talign,
 	Tdbgfile,
+	Tdbgvar,
 	Tl,
 	Tw,
 	Tsh,
@@ -125,6 +126,7 @@ static char *kwmap[Ntok] = {
 	[Tsection] = "section",
 	[Talign] = "align",
 	[Tdbgfile] = "dbgfile",
+	[Tdbgvar] = "dbgvar",
 	[Tsb] = "sb",
 	[Tub] = "ub",
 	[Tsh] = "sh",
@@ -691,6 +693,49 @@ parseline(PState ps)
 		expect(Tnl);
 		closeblk();
 		return PLbl;
+	case Tdbgvar: {
+		DbgVar *dv;
+
+		if (next() != Tstr)
+			err("dbgvar name string expected");
+		char *name = strf(PFn, "%s", tokval.str);
+		expect(Tcomma);
+		if (next() != Tstr)
+			err("dbgvar type string expected");
+		char *type = strf(PFn, "%s", tokval.str);
+		expect(Tcomma);
+		r = parseref();
+		if (rtype(r) != RTmp)
+			err("dbgvar slot temporary expected");
+		expect(Tcomma);
+		expect(Tint);
+		int size = tokval.num;
+		if (size <= 0 || size > 255)
+			err("invalid dbgvar size");
+		expect(Tcomma);
+		expect(Tint);
+		int enc = tokval.num;
+		if (enc < 0 || enc > 255)
+			err("invalid dbgvar encoding");
+		expect(Tcomma);
+		expect(Tint);
+		int line = tokval.num;
+		if (line < 0 || line > 255)
+			line = line < 0 ? 0 : 255;
+		expect(Tnl);
+		vgrow(&curf->dbgvars, curf->ndbgvars + 1);
+		dv = &curf->dbgvars[curf->ndbgvars++];
+		dv->name = name;
+		dv->type = type;
+		dv->tmp = r;
+		dv->size = size;
+		dv->enc = enc;
+		dv->line = line;
+		dv->locreg = -1;
+		dv->locoff = 0;
+		dv->id = 0;
+		return PIns;
+	}
 	case Odbgloc:
 		op = t;
 		k = Kw;
@@ -918,6 +963,8 @@ parsefn(Lnk *lnk)
 	curf->ncon = 2;
 	curf->tmp = vnew(curf->ntmp, sizeof curf->tmp[0], PFn);
 	curf->con = vnew(curf->ncon, sizeof curf->con[0], PFn);
+	curf->dbgvars = vnew(0, sizeof curf->dbgvars[0], PFn);
+	curf->ndbgvars = 0;
 	for (i=0; i<Tmp0; ++i)
 		if (T.fpr0 <= i && i < T.fpr0 + T.nfpr)
 			newtmp(0, Kd, curf);

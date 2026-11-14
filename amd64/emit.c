@@ -188,6 +188,26 @@ slot(Ref r, E *e)
 }
 
 static void
+emit_dbgvars(Fn *fn, E *e)
+{
+	uint i;
+	int s;
+	DbgVar *v;
+
+	for (i=0; i<(uint)fn->ndbgvars; i++) {
+		v = &fn->dbgvars[i];
+		if (v->tmp.type != RTmp)
+			continue;
+		s = fn->tmp[v->tmp.val].slot;
+		if (s < 0)
+			continue;
+		v->locreg = e->fp == RBP ? 6 : 7;
+		v->locoff = slot(SLOT(s), e);
+		emitdbgvar(v);
+	}
+}
+
+static void
 emitcon(Con *con, E *e)
 {
 	char *p, *l;
@@ -841,6 +861,7 @@ amd64_sysv_emitfn(Fn *fn, FILE *f)
 			emitf("pushq %L0", &itmp, e);
 			e->nclob++;
 		}
+	emit_dbgvars(fn, e);
 
 	for (lbl=0, b=fn->start; b; b=b->link) {
 		if (lbl || b->npred > 1) {
@@ -967,6 +988,7 @@ amd64_winabi_emitfn(Fn *fn, FILE *f)
 			emitf("pushq %L0", &itmp, e);
 			e->nclob++;
 		}
+	emit_dbgvars(fn, e);
 
 	for (lbl=0, b=fn->start; b; b=b->link) {
 		if (lbl || b->npred > 1)

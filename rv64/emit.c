@@ -129,6 +129,26 @@ slot(Ref r, Fn *fn)
 }
 
 static void
+emit_dbgvars(Fn *fn)
+{
+	uint i;
+	int s;
+	DbgVar *v;
+
+	for (i=0; i<(uint)fn->ndbgvars; i++) {
+		v = &fn->dbgvars[i];
+		if (v->tmp.type != RTmp)
+			continue;
+		s = fn->tmp[v->tmp.val].slot;
+		if (s < 0)
+			continue;
+		v->locreg = 8;
+		v->locoff = slot(SLOT(s), fn);
+		emitdbgvar(v);
+	}
+}
+
+static void
 emitaddr(Con *c, FILE *f)
 {
 	assert((c->sym.type & ~SExt) == SGlo);
@@ -501,6 +521,7 @@ rv64_emitfn(Fn *fn, FILE *f)
 			off += 8;
 		}
 	}
+	emit_dbgvars(fn);
 
 	for (lbl=0, b=fn->start; b; b=b->link) {
 		if (lbl || b->npred > 1)

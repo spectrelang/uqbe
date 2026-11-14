@@ -396,6 +396,20 @@ struct Lnk {
 	char *secf;
 };
 
+typedef struct DbgVar DbgVar;
+
+struct DbgVar {
+	char *name;
+	char *type;
+	Ref tmp;
+	int size;
+	int enc;
+	int line;
+	int locreg;
+	int locoff;
+	uint id;
+};
+
 struct Fn {
 	Blk *start;
 	Tmp *tmp;
@@ -416,6 +430,8 @@ struct Fn {
 	char leaf;
 	char *name;
 	Lnk lnk;
+	DbgVar *dbgvars;
+	int ndbgvars;
 };
 
 struct Typ {
@@ -628,6 +644,7 @@ void emitfnlnk(char *, Lnk *, FILE *);
 void emitdat(Dat *, FILE *);
 void emitdbgfile(char *, FILE *);
 void emitdbgloc(uint, uint, FILE *);
+void emitdbgvar(DbgVar *);
 void emitdbgfnfin(char *, FILE *);
 void emitdbgfin(FILE *);
 int stashbits(bits, int);

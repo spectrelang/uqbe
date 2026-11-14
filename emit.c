@@ -286,6 +286,8 @@ struct DbgFn {
 	uint end;
 	uint file;
 	char hasline;
+	DbgVar *vars;
+	uint nvars;
 };
 
 static DbgLine *dlines;
@@ -294,6 +296,7 @@ static DbgFn *dfns;
 static uint ndfn;
 static uint curfn;
 static uint nlabel;
+static uint ndbgvar;
 
 static char *
 dbgstrdup(char *s)
@@ -366,6 +369,30 @@ dbgrefdiff(FILE *f, char *ekind, uint eid, char *bkind, uint bid)
 {
 	fprintf(f, "\t.quad %s%s%u - %s%s%u\n",
 		T.asloc, ekind, eid, T.asloc, bkind, bid);
+}
+
+static void
+dbgrefcu(FILE *f, char *kind, uint id)
+{
+	fprintf(f, "\t.long %s%s%u - %sdebug_info_start\n",
+		T.asloc, kind, id, T.asloc);
+}
+
+static uint
+dbgsleblen(int64_t v)
+{
+	uint n;
+	int byte;
+
+	n = 1;
+	for (;;) {
+		byte = v & 0x7f;
+		v >>= 7;
+		if ((v == 0 && !(byte & 0x40))
+		|| (v == -1 && (byte & 0x40)))
+			return n;
+		n++;
+	}
 }
 
 static void
@@ -450,6 +477,29 @@ emitdbgloc(uint line, uint col, FILE *f)
 	d->line = line;
 }
 
+void
+emitdbgvar(DbgVar *v)
+{
+	DbgFn *d;
+	DbgVar *dv;
+
+	if (!emitdbg || ndfn == 0 || curfn >= ndfn || v->locreg < 0)
+		return;
+	d = &dfns[curfn];
+	if (!d->vars)
+		d->vars = vnew(0, sizeof d->vars[0], PHeap);
+	vgrow(&d->vars, d->nvars + 1);
+	dv = &d->vars[d->nvars++];
+	dv->name = dbgunquote(v->name);
+	dv->type = dbgunquote(v->type);
+	dv->size = v->size;
+	dv->enc = v->enc;
+	dv->line = v->line;
+	dv->locreg = v->locreg;
+	dv->locoff = v->locoff;
+	dv->id = ndbgvar++;
+}
+
 static void
 emitdbgfnstart(char *n, FILE *f)
 {
@@ -467,6 +517,8 @@ emitdbgfnstart(char *n, FILE *f)
 	d->end = 0;
 	d->file = curfile;
 	d->hasline = 0;
+	d->vars = 0;
+	d->nvars = 0;
 	curfn = ndfn++;
 	lab = d->start;
 	fprintf(f, "\t%sdbgfn_begin%u:\n", T.asloc, lab);
@@ -519,11 +571,23 @@ emitdwarffin(FILE *f)
 	fputs("\t.byte 0x12, 0x07\n", f);
 	fputs("\t.byte 0x10, 0x17\n", f);
 	fputs("\t.byte 0, 0\n", f);
-	fputs("\t.byte 2, 0x2e, 0\n", f);
+	fputs("\t.byte 2, 0x2e, 1\n", f);
 	fputs("\t.byte 0x03, 0x08\n", f);
 	fputs("\t.byte 0x11, 0x01\n", f);
 	fputs("\t.byte 0x12, 0x07\n", f);
 	fputs("\t.byte 0x3f, 0x19\n", f);
+	fputs("\t.byte 0, 0\n", f);
+	fputs("\t.byte 3, 0x24, 0\n", f);
+	fputs("\t.byte 0x03, 0x08\n", f);
+	fputs("\t.byte 0x0b, 0x0b\n", f);
+	fputs("\t.byte 0x3e, 0x0b\n", f);
+	fputs("\t.byte 0, 0\n", f);
+	fputs("\t.byte 4, 0x34, 0\n", f);
+	fputs("\t.byte 0x03, 0x08\n", f);
+	fputs("\t.byte 0x3a, 0x0f\n", f);
+	fputs("\t.byte 0x3b, 0x0f\n", f);
+	fputs("\t.byte 0x02, 0x18\n", f);
+	fputs("\t.byte 0x49, 0x13\n", f);
 	fputs("\t.byte 0, 0\n", f);
 	fputs("\t.byte 0\n", f);
 
@@ -615,6 +679,9 @@ emitdwarffin(FILE *f)
 	else
 		fprintf(f, "\t.long %sdebug_line_start\n", T.asloc);
 	for (i=0; i<ndfn; i++) {
+		uint j;
+		uint elen;
+
 		if (dfns[i].file == 0 || dfns[i].end == 0)
 			continue;
 		fputs("\t.byte 2\n", f);
@@ -622,6 +689,24 @@ emitdwarffin(FILE *f)
 		dbgref(f, "dbgfn_begin", dfns[i].start);
 		dbgrefdiff(f, "dbgfn_end", dfns[i].end,
 			"dbgfn_begin", dfns[i].start);
+		for (j=0; j<dfns[i].nvars; j++) {
+			DbgVar *dv = &dfns[i].vars[j];
+			fprintf(f, "%sdbgtype%u:\n", T.asloc, dv->id);
+			fputs("\t.byte 3\n", f);
+			fprintf(f, "\t.asciz \"%s\"\n", dv->type);
+			fprintf(f, "\t.byte %u\n", dv->size);
+			fprintf(f, "\t.byte %u\n", dv->enc);
+			fputs("\t.byte 4\n", f);
+			fprintf(f, "\t.asciz \"%s\"\n", dv->name);
+			dbguleb(f, dfns[i].file);
+			dbguleb(f, (uint)dv->line);
+			elen = 1 + dbgsleblen(dv->locoff);
+			fprintf(f, "\t.byte %u\n", elen);
+			fprintf(f, "\t.byte %u\n", 0x70 + dv->locreg);
+			dbgsleb(f, dv->locoff);
+			dbgrefcu(f, "dbgtype", dv->id);
+		}
+		fputs("\t.byte 0\n", f);
 	}
 	fputs("\t.byte 0\n", f);
 	fprintf(f, "%sdebug_info_end:\n", T.asloc);
